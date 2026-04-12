@@ -1,0 +1,27 @@
+{
+  "users": [
+    {
+      "uid": "admin-uid",
+      "email": "superadmin@gov.iq",
+      "password": "Admin@2026",
+      "displayName": "المدير العام",
+      "role": "super_admin",
+      "createdAt": "2026-04-12T16:39:59.836Z"
+    }
+  ],
+  "chats": [],
+  "messages": [],
+  "documents": [],
+  "departments": [
+    {
+      "id": "dept-1",
+      "name": "قسم تكنولوجيا المعلومات",
+      "managerId": "manager-1",
+      "createdAt": "2026-04-12T16:39:59.836Z"
+    }
+  ],
+  "sections": [],
+  "settings": {
+    "siteName": "نظام المراسلات الحكومي"
+  }
+}
