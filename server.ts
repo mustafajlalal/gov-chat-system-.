@@ -13,25 +13,36 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// تأكيد وجود مجلد الرفع
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
 
 const MONGODB_URI = process.env.MONGODB_URI;
-let isMongoConnected = false;
+const DATA_FILE = path.join(process.cwd(), 'data.json');
 
-// وظيفة الاتصال القوي بقاعدة البيانات
+let isMongoConnected = false;
+let localData: any = { users: [], departments: [], sections: [], chats: [], messages: [], documents: [], settings: {} };
+
+// تحميل البيانات المحلية كاحتياط
+function loadLocalData() {
+  if (fs.existsSync(DATA_FILE)) {
+    try {
+      localData = JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8'));
+    } catch (e) { console.error('Error loading data.json'); }
+  }
+}
+loadLocalData();
+
 async function connectDB() {
   if (isMongoConnected && mongoose.connection.readyState === 1) return;
   if (!MONGODB_URI) return;
   try {
     await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
     isMongoConnected = true;
-    console.log('Connected to MongoDB');
+    console.log('MongoDB Connected');
   } catch (err) {
-    console.error('MongoDB Connection Error:', err);
+    console.error('MongoDB Connection Failed, using local data');
     isMongoConnected = false;
   }
 }
@@ -40,141 +51,131 @@ const app = express();
 app.use(express.json());
 app.use('/uploads', express.static(UPLOADS_DIR));
 
-// إعداد رفع الملفات (خاصية تحميل الملفات)
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOADS_DIR),
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + '-' + file.originalname);
-  }
-});
-const upload = multer({ storage });
-
 app.use(async (req, res, next) => {
   await connectDB();
   next();
 });
 
-// --- الأوامر الجبارة (كل العمليات) ---
+// --- API Routes (مع نظام الاحتياط الذكي) ---
 
-// 1. تسجيل الدخول
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
-  const user = await User.findOne({ email, password });
-  if (user) {
-    const userObj = user.toObject();
-    delete userObj.password;
-    res.json({ user: userObj });
-  } else {
-    res.status(401).json({ error: 'البريد أو كلمة المرور غير صحيحة' });
+  if (isMongoConnected) {
+    const user = await User.findOne({ email, password });
+    if (user) return res.json({ user });
   }
+  const user = localData.users.find((u: any) => u.email === email && u.password === password);
+  if (user) return res.json({ user });
+  res.status(401).json({ error: 'بيانات الدخول غير صحيحة' });
 });
 
-// 2. إدارة المستخدمين (إضافة، حذف، جلب)
 app.get('/api/users', async (req, res) => {
-  const users = await User.find({}, '-password');
-  res.json(users);
+  if (isMongoConnected) return res.json(await User.find());
+  res.json(localData.users);
 });
 
 app.post('/api/users', async (req, res) => {
-  try {
-    const { email, password, displayName, role, departmentId, sectionId } = req.body;
-    const uid = Math.random().toString(36).substr(2, 9);
-    const newUser = await User.create({ uid, email, password: password || 'Admin@123', displayName, role, departmentId, sectionId });
-    res.json(newUser);
-  } catch (err) {
-    res.status(400).json({ error: 'خطأ في إضافة المستخدم أو البريد موجود مسبقاً' });
-  }
+  const newUser = { ...req.body, uid: Math.random().toString(36).substr(2, 9) };
+  if (isMongoConnected) await User.create(newUser);
+  localData.users.push(newUser);
+  res.json(newUser);
 });
 
-app.delete('/api/users/:uid', async (req, res) => {
-  await User.deleteOne({ uid: req.params.uid });
-  res.json({ success: true });
-});
-
-// 3. الأقسام (خاصية الحذف والإضافة)
 app.get('/api/departments', async (req, res) => {
-  const depts = await Department.find();
-  res.json(depts);
+  if (isMongoConnected) return res.json(await Department.find());
+  res.json(localData.departments);
 });
 
 app.post('/api/departments', async (req, res) => {
-  const id = Math.random().toString(36).substr(2, 9);
-  const newDept = await Department.create({ ...req.body, id });
+  const newDept = { ...req.body, id: Math.random().toString(36).substr(2, 9) };
+  if (isMongoConnected) await Department.create(newDept);
+  localData.departments.push(newDept);
   res.json(newDept);
 });
 
-app.delete('/api/departments/:id', async (req, res) => {
-  await Department.deleteOne({ id: req.params.id });
-  res.json({ success: true });
+app.get('/api/sections', async (req, res) => {
+  if (isMongoConnected) return res.json(await Section.find());
+  res.json(localData.sections || []);
 });
 
-// 4. الدردشات والرسائل (خاصية الدردشة)
+app.post('/api/sections', async (req, res) => {
+  const newSect = { ...req.body, id: Math.random().toString(36).substr(2, 9) };
+  if (isMongoConnected) await Section.create(newSect);
+  if (!localData.sections) localData.sections = [];
+  localData.sections.push(newSect);
+  res.json(newSect);
+});
+
 app.get('/api/chats', async (req, res) => {
-  const chats = await Chat.find();
-  res.json(chats);
+  if (isMongoConnected) return res.json(await Chat.find());
+  res.json(localData.chats || []);
 });
 
 app.post('/api/chats', async (req, res) => {
-  const id = Math.random().toString(36).substr(2, 9);
-  const newChat = await Chat.create({ ...req.body, id });
+  const newChat = { ...req.body, id: Math.random().toString(36).substr(2, 9) };
+  if (isMongoConnected) await Chat.create(newChat);
+  if (!localData.chats) localData.chats = [];
+  localData.chats.push(newChat);
   res.json(newChat);
 });
 
 app.get('/api/messages/:chatId', async (req, res) => {
-  const messages = await Message.find({ chatId: req.params.chatId });
-  res.json(messages);
+  if (isMongoConnected) return res.json(await Message.find({ chatId: req.params.chatId }));
+  res.json((localData.messages || []).filter((m: any) => m.chatId === req.params.chatId));
 });
 
 app.post('/api/messages', async (req, res) => {
-  const id = Math.random().toString(36).substr(2, 9);
-  const newMessage = await Message.create({ ...req.body, id });
+  const newMessage = { ...req.body, id: Math.random().toString(36).substr(2, 9), timestamp: new Date() };
+  if (isMongoConnected) await Message.create(newMessage);
+  if (!localData.messages) localData.messages = [];
+  localData.messages.push(newMessage);
   res.json(newMessage);
 });
 
-// 5. رفع الملفات والمستندات
+// الحذف (الجذري)
+app.delete('/api/users/:uid', async (req, res) => {
+  if (isMongoConnected) await User.deleteOne({ uid: req.params.uid });
+  localData.users = localData.users.filter((u: any) => u.uid !== req.params.uid);
+  res.json({ success: true });
+});
+
+app.delete('/api/departments/:id', async (req, res) => {
+  if (isMongoConnected) await Department.deleteOne({ id: req.params.id });
+  localData.departments = localData.departments.filter((d: any) => d.id !== req.params.id);
+  res.json({ success: true });
+});
+
+// رفع الملفات
+const upload = multer({ dest: 'uploads/' });
 app.post('/api/upload', upload.single('file'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file' });
+  if (!req.file) return res.status(400).send('No file');
   res.json({ url: `/uploads/${req.file.filename}` });
 });
 
-app.get('/api/documents', async (req, res) => {
-  const docs = await Document.find();
-  res.json(docs);
+// التصفير (Reset)
+app.post('/api/settings/reset', async (req, res) => {
+  if (isMongoConnected) {
+    await User.deleteMany({ role: { $ne: 'super_admin' } });
+    await Department.deleteMany({});
+    await Section.deleteMany({});
+    await Chat.deleteMany({});
+    await Message.deleteMany({});
+  }
+  localData = { ...localData, departments: [], sections: [], chats: [], messages: [] };
+  res.json({ success: true });
 });
 
-app.post('/api/documents', async (req, res) => {
-  const id = Math.random().toString(36).substr(2, 9);
-  const newDoc = await Document.create({ ...req.body, id });
-  res.json(newDoc);
-});
-
-// 6. الإعدادات (خاصية التصفير/التعديل)
-app.get('/api/settings', async (req, res) => {
-  let settings = await Setting.findOne();
-  if (!settings) settings = await Setting.create({ siteName: 'نظام المراسلات الحكومي' });
-  res.json(settings);
-});
-
-app.post('/api/settings', async (req, res) => {
-  const settings = await Setting.findOneAndUpdate({}, req.body, { upsert: true, new: true });
-  res.json(settings);
-});
-
-// --- التجهيز للإنتاج ---
+// Production serving
 if (process.env.NODE_ENV === 'production') {
   const distPath = path.join(process.cwd(), 'dist');
   app.use(express.static(distPath));
   app.get('*', (req, res) => {
-    if (!req.url.startsWith('/api/')) {
-      res.sendFile(path.join(distPath, 'index.html'));
-    }
+    if (!req.url.startsWith('/api/')) res.sendFile(path.join(distPath, 'index.html'));
   });
 } else {
   const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
   app.use(vite.middlewares);
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => console.log(`Server: http://localhost:${PORT}`));
+  app.listen(3000);
 }
 
 export default app;
