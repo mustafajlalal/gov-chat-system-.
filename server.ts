@@ -13,6 +13,7 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// تأكيد وجود مجلد الرفع
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -21,18 +22,17 @@ if (!fs.existsSync(UPLOADS_DIR)) {
 const MONGODB_URI = process.env.MONGODB_URI;
 let isMongoConnected = false;
 
+// وظيفة الاتصال القوي بقاعدة البيانات
 async function connectDB() {
   if (isMongoConnected && mongoose.connection.readyState === 1) return;
-  if (!MONGODB_URI) {
-    console.error('MONGODB_URI missing');
-    return;
-  }
+  if (!MONGODB_URI) return;
   try {
-    await mongoose.connect(MONGODB_URI);
+    await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
     isMongoConnected = true;
     console.log('Connected to MongoDB');
   } catch (err) {
-    console.error('MongoDB Error:', err);
+    console.error('MongoDB Connection Error:', err);
+    isMongoConnected = false;
   }
 }
 
@@ -40,47 +40,51 @@ const app = express();
 app.use(express.json());
 app.use('/uploads', express.static(UPLOADS_DIR));
 
-// Ensure DB connection for every request
+// إعداد رفع الملفات (خاصية تحميل الملفات)
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, UPLOADS_DIR),
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + '-' + file.originalname);
+  }
+});
+const upload = multer({ storage });
+
 app.use(async (req, res, next) => {
   await connectDB();
   next();
 });
 
-// --- API Routes ---
+// --- الأوامر الجبارة (كل العمليات) ---
 
-// Auth
+// 1. تسجيل الدخول
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
-  try {
-    const user = await User.findOne({ email, password });
-    if (user) {
-      const userObj = user.toObject();
-      delete userObj.password;
-      res.json({ user: userObj });
-    } else {
-      res.status(401).json({ error: 'البريد أو كلمة المرور غير صحيحة' });
-    }
-  } catch (e) { res.status(500).json({ error: 'Server error' }); }
+  const user = await User.findOne({ email, password });
+  if (user) {
+    const userObj = user.toObject();
+    delete userObj.password;
+    res.json({ user: userObj });
+  } else {
+    res.status(401).json({ error: 'البريد أو كلمة المرور غير صحيحة' });
+  }
 });
 
-// Users
+// 2. إدارة المستخدمين (إضافة، حذف، جلب)
 app.get('/api/users', async (req, res) => {
   const users = await User.find({}, '-password');
   res.json(users);
 });
 
 app.post('/api/users', async (req, res) => {
-  const { email, password, displayName, role, departmentId, sectionId } = req.body;
-  const uid = Math.random().toString(36).substr(2, 9);
   try {
+    const { email, password, displayName, role, departmentId, sectionId } = req.body;
+    const uid = Math.random().toString(36).substr(2, 9);
     const newUser = await User.create({ uid, email, password: password || 'Admin@123', displayName, role, departmentId, sectionId });
     res.json(newUser);
-  } catch (err) { res.status(400).json({ error: 'Email already exists' }); }
-});
-
-app.patch('/api/users/:uid', async (req, res) => {
-  const updated = await User.findOneAndUpdate({ uid: req.params.uid }, req.body, { new: true });
-  res.json(updated);
+  } catch (err) {
+    res.status(400).json({ error: 'خطأ في إضافة المستخدم أو البريد موجود مسبقاً' });
+  }
 });
 
 app.delete('/api/users/:uid', async (req, res) => {
@@ -88,7 +92,7 @@ app.delete('/api/users/:uid', async (req, res) => {
   res.json({ success: true });
 });
 
-// Departments & Sections
+// 3. الأقسام (خاصية الحذف والإضافة)
 app.get('/api/departments', async (req, res) => {
   const depts = await Department.find();
   res.json(depts);
@@ -105,18 +109,7 @@ app.delete('/api/departments/:id', async (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/sections', async (req, res) => {
-  const sects = await Section.find();
-  res.json(sects);
-});
-
-app.post('/api/sections', async (req, res) => {
-  const id = Math.random().toString(36).substr(2, 9);
-  const newSect = await Section.create({ ...req.body, id });
-  res.json(newSect);
-});
-
-// Chats & Messages
+// 4. الدردشات والرسائل (خاصية الدردشة)
 app.get('/api/chats', async (req, res) => {
   const chats = await Chat.find();
   res.json(chats);
@@ -139,7 +132,24 @@ app.post('/api/messages', async (req, res) => {
   res.json(newMessage);
 });
 
-// Settings
+// 5. رفع الملفات والمستندات
+app.post('/api/upload', upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file' });
+  res.json({ url: `/uploads/${req.file.filename}` });
+});
+
+app.get('/api/documents', async (req, res) => {
+  const docs = await Document.find();
+  res.json(docs);
+});
+
+app.post('/api/documents', async (req, res) => {
+  const id = Math.random().toString(36).substr(2, 9);
+  const newDoc = await Document.create({ ...req.body, id });
+  res.json(newDoc);
+});
+
+// 6. الإعدادات (خاصية التصفير/التعديل)
 app.get('/api/settings', async (req, res) => {
   let settings = await Setting.findOne();
   if (!settings) settings = await Setting.create({ siteName: 'نظام المراسلات الحكومي' });
@@ -151,7 +161,7 @@ app.post('/api/settings', async (req, res) => {
   res.json(settings);
 });
 
-// --- Production Setup ---
+// --- التجهيز للإنتاج ---
 if (process.env.NODE_ENV === 'production') {
   const distPath = path.join(process.cwd(), 'dist');
   app.use(express.static(distPath));
@@ -164,7 +174,7 @@ if (process.env.NODE_ENV === 'production') {
   const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
   app.use(vite.middlewares);
   const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => console.log(`Dev: http://localhost:${PORT}`));
+  app.listen(PORT, () => console.log(`Server: http://localhost:${PORT}`));
 }
 
 export default app;
